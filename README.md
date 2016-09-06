@@ -7,7 +7,7 @@ library(ggplot2)
 
 library(devtools)
 
-install_github("xyomics/genuMet")
+install_github("https://github.com/xyomics/genuMet")
 
 library(genuMet)
 
