@@ -1,0 +1,14 @@
+Package: genuMet
+Type: Package
+Title: distinguish genuine signal of untargeted metabolites from measurement artifacts without QC samples
+Version: 1.0.1
+Date: 2016-07-11
+Author: Liu Cao
+Maintainer: Liu Cao <xyomics@gmail.com>
+Description: Remove false metabolites signal from LCMS data
+License: GPL (>=2)
+LazyData: TRUE
+RoxygenNote: 5.0.1
+Suggests: knitr,
+    rmarkdown
+VignetteBuilder: knitr

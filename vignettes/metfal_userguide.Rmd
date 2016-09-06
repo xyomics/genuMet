@@ -1,0 +1,182 @@
+---
+title: "'genuMet' tutorial"
+author: "Liu Cao"
+date: "`r Sys.Date()`"
+output: rmarkdown::html_vignette
+vignette: >
+  %\VignetteIndexEntry{Vignette Title}
+  %\VignetteEngine{knitr::rmarkdown}
+  %\VignetteEncoding{UTF-8}
+---
+
+## Introduction
+Metabolomics consists of methods and techniques measuring the metabolite profile of biofluids (Alonso et al., 2015). It has been widely applied to biomarker discovery and molecular mechanism inference (Johnson et al., 2016). Untargeted metabolomics expriments measure global ions within certain mass range, including both known metabolites and structurally novel metabolites (Vinayavekhin et al., 2010). However, due to experimental artifacts (Benjamin et al., 2010) and miscalibration (Tzoulaki et al., 2014), some false signals may be called as untargeted metabolites, which reduces the power of subsequent statistical analysis and leads to unreliable mechanism inference. Quality control (QC) samples like pooled QC sample enable the measure of repeatability within analytical batch and help identify metabolic signal with excessive drift (Dunn et al., 2011). However, pooled QC samples are not always available in large-scale studies (Dunn et al., 2011). `genuMet` aims to distinguish genuine signal from measurement artifact without QC samples.
+
+This vignette gives an example of `genuMet` analysis pipeline, discusses the 4 metrics in use, and explain details of parameters of the functions and plots. 
+
+## Data format
+`genuMet` assumes that the input table is a standard metabolomics dataset in csv format. The input table can be partitioned into 4 rectangular region. The top left is blank. The top right is row headers. The down left is column headers. The down right is metabolites signal matrix, whose columns are samples in injection order and rows are metabolic features. The following table is **simdata.csv** in `genuMet` package.
+```{r,results = "asis",echo=FALSE,warning = FALSE,message=FALSE}
+library(genuMet)
+simdpath = system.file("extdata", "simdata.csv", package = "genuMet")
+simd = read.csv(simdpath,header=FALSE)
+colnames(simd) = NULL
+pander::pandoc.table(simd[1:7, 1:9],split.table = Inf,style="rmarkdown")
+```
+
+## `genuMet` pipline
+### Data preparation
+The pipline will be based on the example data **simdata.csv** in the package. 
+```{r,results = "markup",warning = FALSE}
+## loading genuMet package
+library(genuMet)
+
+## finding the path of simdata.csv
+simdpath = system.file("extdata", "simdata.csv", package = "genuMet")
+
+## Read the metabolomics dataset
+simd = read.metfile(simdpath,nrowheader=4,ncolheader=7, metcol=1,smplrow=4, resmpl="")
+```
+
+After loading the package and obtaining the path of metabolomics dataset, we can use **read.metfile** to read in the dataset. A list of parameters should be given to locate the metabolites signal matrix, sample ID, metabolites ID as well as samples we hope to include:
+
+- *nrowheader* The number of row headers (default=4)
+- *ncolheader* The number of column headers (default=7)
+- *metcol* The column number of metabolites ID (default=1)
+- *smplrow* The row number of sample ID (default=4)
+- *resmpl* Regular expression (The one used in **grepl**) of sample names which should be included (default="")
+
+By default, all the samples will be included for subsequent analysis. If only a subset of the samples should be included, the regular expression of the sample ID need to be given by *resmpl*. For example, if the dataset consists of both QC samples ("QC1", "QC2", "QC3", ...) and biological samples ("S1","S2","S3", ...), and we hope to only include the biological samples, we can set `resmpl="^S"` or `resmpl="^[^Q]"`, indicating that only those beginning with `S` or not beginning with `Q` will be included. The parameters of **read.metfile** above are all default parameters. We explicitly write here just for the purpose of presenting the usage of the function.
+
+The metabolomics signal matrix returned by **read.metfile** is as follows:
+```{r, results="asis",echo=FALSE}
+pander::pandoc.table(simd[1:3, 1:4])
+```
+
+### Generate missing rate matrix and extract 4 features
+Based on the missing rate pattern of the metabolites signal, `metfal` judges whether a metabolite is an artifact or not. Once obtaining the metabolomics signal matrix with **read.metfile**, we can feed it to **makefeature** to calculate the missing rate matrix. A window begins at the first sample and slides across the injection order. With specified window size (*wsize*) and slide size (*ssize*), missing rate will be calculated within each window. *wsize* is the number of samples in each window (default=100), and *ssize*$*$*wsize* is the sliding step of the window (default of *ssize* is 0.5). If the length of last window is less than *wsize*, it will be combined with the second to the last window.   
+
+Four metrics are employed to characterize the missing rate pattern:
+
+- **Variance**: Variance of missing rates for measurement artifacts tend to be large as these signals may originate from unstable experiment shift, while the variance for genuine metabolite should be small, because after randomization the missing rate in each window should to be similar.
+- **Number of switches**: If the missing rate difference between adjacent windows is greater than *defswitch* (default=0.2), a switch will be counted. When the threshold of missing rate contrast is large enough, very few switches will be detected in true metabolite. But when the threshold becomes small, some rare true metabolites may have extremely large number of switches. 
+- **Longest block**: The consecutive windows between two switches is defined as a block. Given high *defswitch*, genuine metabolites may have very long longest block, while artifact tend to have small longest block. 
+- **Mean missing rate**: Measurement artifact overall has very high missing rate. Consequently, some obvious false signal may have small variance, small number of switches and full longest block, which is hard to be detected by the first 3 metrics. Median missing rate can well measure overall high missing rate.
+
+```{r, results="markup"}
+metf = makefeature(data=simd,wsize=10,ssize=0.5,defswitch=0.2)
+```
+The returned list contains missing rate matrix, 4 features, meta data and general parameters used to generate the missing rate matrix. See the R document for **makefeature** for details.
+
+### Detect false signal
+With the 4 features characterizing the missing rate pattern, we can give the threshhold for each of them to predict potential false signal.
+
+```{r, results="markup"}
+falsig = falsignal(l=metf, cutoffvar=0.03,cutoffswt=1,cutofflong=NULL)
+```
+
+Two criteria are employed by `genuMet`. One criterion is that if any one of the feature pass the threshold, the corresponding metabolites will be discriminated as false signal (type I). A more stringent criterion is that any metabolites pass the threshold of mean missing rate (default=0.95) and variance (default=0.03) will be idenfied as false signal. For those that fails, only when they pass the threshold of both "the number of switches" (default=1) and "longest block" (default=the number of windows) will they be classified as false signal (type II).
+
+**falsig** returns the bool vectors of whether the metabolite is type I (or II) false signal or not. **write.metfile** can then output the predicted false signal and true metabolites respectively in two csv files.
+
+```{r, results="asis", eval = FALSE}
+write.metfile(simd,falsig,type=2,trans=FALSE)
+```
+The type of false signal and the output format need to be specified. The above code will output type II good and false signal without transposing the table, which means columns are still samples and rows are metabolites. By default, type I good and false signal will be output with rows of samples and columns of metabolites (*type=1*, *trans=TRUE*). 
+
+## Visualization
+### Missing rate line
+`genuMet` provides several visualization tools for quality control. **plot_mrate** can save plots of missing rate line for either type I or type II metabolites in pdf files by seting *type="1"* or *type="2"*:
+```{r, results="asis",eval = FALSE}
+plot_mrate(falsig,type="1")
+```
+
+**plot_mrate** can also print missing rate plot for single metabolites on screen by setting type of plot as *type="single"* and metabolite name with *mname=*. See the following example.
+
+### QC plot
+**plot_qc** provide multiple quality control graphs which summarize the distributions of missing rate for false and good metabolites as well as the four metrics. 
+```{r eval=FALSE}
+plot_qc(falsig)
+```
+
+**heatmap of missing rate**
+
+```{r fig.width=4, fig.height=2,echo=FALSE}
+library(png)
+library(grid)
+img <- readPNG(system.file("extdata", "heat.png", package = "genuMet"))
+grid.raster(img)
+```
+
+
+**variance distribution**
+
+```{r fig.width=4, fig.height=2,echo=FALSE}
+img <- readPNG(system.file("extdata", "var1.png", package = "genuMet"))
+grid.raster(img)
+```
+
+
+**mean missing rate distribution**
+
+```{r fig.width=4, fig.height=2,echo=FALSE}
+img <- readPNG(system.file("extdata", "mm1.png", package = "genuMet"))
+grid.raster(img)
+```
+
+
+**longest block distribution**
+
+```{r fig.width=4, fig.height=2,echo=FALSE}
+img <- readPNG(system.file("extdata", "lb1.png", package = "genuMet"))
+grid.raster(img)
+```
+
+
+**switches distribution**
+
+```{r fig.width=4, fig.height=2,echo=FALSE}
+img <- readPNG(system.file("extdata", "swi1.png", package = "genuMet"))
+grid.raster(img)
+```
+
+
+## Summary of the pipline
+The overall code of the pipline is summarized as follows,
+```{r eval = FALSE}
+### find the path of simulated metabolomics data
+simdpath = system.file("extdata", "simdata.csv", package = "genuMet")
+
+### read in the simulated data
+simd = read.metfile(simdpath,nrowheader=4,ncolheader=7, metcol=1,smplrow=4)
+
+### Generate missing rate matrix and extract 4 features
+metf = makefeature(data=simd,wsize=10,ssize=0.5,defswitch=0.2)
+
+### find false signal
+falsig = falsignal(l=metf)
+
+### plot qc figures
+plot_mrate(falsig)
+plot_qc(falsig)
+
+### output false and good metabolites csv files
+write.metfile(simd,falsig)
+```
+The `genuMet` pipline will produce two csv files containing the predicted false and good metabolites signal, two pdf files for missing rate line and one pdf file for overall QC plot. When the number of metabolites is very large, **plot_mrate** may be a little bit slow to plot all the missing rate line.
+
+## References
+[1] Alonso, Arnald, Sara Marsal, and Antonio Julià. "Analytical methods in untargeted metabolomics: state of the art in 2015." Frontiers in bioengineering and biotechnology 3 (2015): 23.
+
+[2] Johnson, Caroline H., Julijana Ivanisevic, and Gary Siuzdak. "Metabolomics: beyond biomarkers and towards mechanisms." Nature Reviews Molecular Cell Biology (2016).
+
+[3] Vinayavekhin, Nawaporn, and Alan Saghatelian. "Untargeted metabolomics." Current Protocols in Molecular Biology (2010): 30-1.
+
+[4] Bowen, Benjamin P., and Trent R. Northen. "Dealing with the unknown: metabolomics and metabolite atlases." Journal of the American Society for Mass Spectrometry 21.9 (2010): 1471-1476.
+
+[5] Tzoulaki, Ioanna, et al. "Design and analysis of metabolomics studies in epidemiological research: a primer on-omic technologies." American journal of epidemiology (2014): kwu143.
+
+[6] Dunn, Warwick B., et al. "Procedures for large-scale metabolic profiling of serum and plasma using gas chromatography and liquid chromatography coupled to mass spectrometry." Nature protocols 6.7 (2011): 1060-1083.
+
+
+
