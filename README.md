@@ -3,10 +3,12 @@ distinguish genuine signal of untargeted metabolites from measurement artifacts 
 
 # installation
 
+library(ggplot2)
+
 library(devtools)
 
 install_github("xyomics/genuMet")
 
 library(genuMet)
 
-library(ggplot2)
+
